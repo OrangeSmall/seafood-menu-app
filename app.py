@@ -122,7 +122,7 @@ def create_image(data_df, date_str, manual_upload=None):
     draw.rectangle([(0, 0), (width, header_h)], fill=c_header_bg)
     draw.text((margin, 50), "本週活體報價", fill=c_header_text, font=font_header)
     draw.text((margin, 170), f"報價日期：{date_str}", fill="#FFF8DC", font=font_date) 
-    draw.text((width - margin - 500, 180), "※ 若遇特殊狀況依現場主管為主", fill="#F0E68C", font=font_date)
+    draw.text((width - margin - 500, 180), "※特殊狀況請示現場主管", fill="#F0E68C", font=font_date)
 
     cursor_l = 330
     cursor_r = 330
