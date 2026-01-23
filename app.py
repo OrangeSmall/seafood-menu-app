@@ -14,17 +14,14 @@ st.set_page_config(page_title="海鮮報價生成器", page_icon="🦀")
 
 # --- 0. 自動下載中文字體 ---
 def download_font():
-    # 使用 Google 的思源黑體 (Noto Sans TC)
     font_url = "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Bold.otf"
     font_path = "NotoSansCJKtc-Bold.otf"
-    
     if not os.path.exists(font_path):
-        with st.spinner('正在下載中文字體，第一次執行會比較久，請稍等...'):
+        with st.spinner('正在下載中文字體...'):
             try:
                 urllib.request.urlretrieve(font_url, font_path)
-                st.success("字體下載完成！")
             except:
-                st.error("字體下載失敗，將使用預設字體（可能會亂碼）")
+                pass
     return font_path
 
 # --- 1. 連線設定 ---
@@ -35,8 +32,8 @@ def get_google_sheet_client():
     client = gspread.authorize(creds)
     return client
 
-# --- 2. 繪圖函式 (修正符號版) ---
-def create_image(data_df, date_str):
+# --- 2. 繪圖函式 (自動抓取固定 Logo) ---
+def create_image(data_df, date_str, manual_upload=None):
     font_path = download_font()
     
     # 版面設定
@@ -45,7 +42,7 @@ def create_image(data_df, date_str):
     col_gap = 100 
     col_width = (width - (margin * 2) - col_gap) / 2 
     
-    # 顏色定義 (維持淡茶色系)
+    # 顏色定義
     c_bg = "#FDFCF5"         
     c_header_bg = "#C19A6B"  
     c_header_text = "#FFFFFF"
@@ -56,7 +53,6 @@ def create_image(data_df, date_str):
     c_note_bg = "#F2EBE5"    
     c_note_text = "#8E7878"  
 
-    # 載入字體
     try:
         font_header = ImageFont.truetype(font_path, 80)
         font_date = ImageFont.truetype(font_path, 40)
@@ -68,40 +64,61 @@ def create_image(data_df, date_str):
     except:
         font_header = ImageFont.load_default()
     
-    # 計算高度邏輯
+    # 計算高度
     grouped = list(data_df.groupby('品項名稱', sort=False))
     y_col1 = 350 
     y_col2 = 350 
-    
     for i, (name, group) in enumerate(grouped):
-        item_h = 80 
-        item_h += len(group) * 60 
-        item_h += 80 
-        item_h += 60 
-        
+        item_h = 80 + len(group) * 60 + 80 + 60
         if y_col1 <= y_col2:
             y_col1 += item_h
         else:
             y_col2 += item_h
-
     total_height = max(y_col1, y_col2) + 100 
 
     # --- 開始繪圖 ---
     img = Image.new("RGB", (width, int(total_height)), c_bg)
+    
+    # --- [智慧浮水印邏輯] ---
+    watermark_source = None
+    
+    # 1. 優先檢查 GitHub 是否有固定檔案
+    if os.path.exists("logo.png"):
+        watermark_source = "logo.png"
+    elif os.path.exists("logo.jpg"):
+        watermark_source = "logo.jpg"
+    # 2. 如果沒有固定檔案，才檢查是否有手動上傳的
+    elif manual_upload is not None:
+        watermark_source = manual_upload
+
+    # 執行貼圖
+    if watermark_source:
+        try:
+            wm = Image.open(watermark_source).convert("RGBA")
+            target_w = int(width * 0.5)
+            ratio = target_w / float(wm.size[0])
+            target_h = int(float(wm.size[1]) * float(ratio))
+            wm = wm.resize((target_w, target_h))
+            
+            r, g, b, a = wm.split()
+            a = a.point(lambda p: p * 0.10) # 透明度 10%
+            wm.putalpha(a)
+            
+            x_pos = (width - target_w) // 2
+            y_pos = (int(total_height) - target_h) // 2
+            img.paste(wm, (x_pos, y_pos), wm)
+        except Exception as e:
+            print(f"浮水印錯誤: {e}")
+
     draw = ImageDraw.Draw(img)
 
-    # A. Header
+    # 繪製內容 (與之前相同)
     header_h = 280
     draw.rectangle([(0, 0), (width, header_h)], fill=c_header_bg)
-    draw.text((margin, 50), "本週活體海鮮價格", fill=c_header_text, font=font_header)
-    
-    # [修正 1] 去除亂碼方框，改用純文字或簡單符號
-    # 📅 -> 移除，直接顯示文字
+    draw.text((margin, 50), "本週活體報價", fill=c_header_text, font=font_header)
     draw.text((margin, 170), f"報價日期：{date_str}", fill="#FFF8DC", font=font_date) 
-    # ⚠️ -> 改成 ※ (標準符號)
-    draw.text((width - margin - 500, 180), "※ 價格若有特殊情況請詢問現場主管", fill="#F0E68C", font=font_date)
+    draw.text((width - margin - 500, 180), "※ 遇特殊狀況依現場主管為主", fill="#F0E68C", font=font_date)
 
-    # B. 雙欄迴圈繪製
     cursor_l = 330
     cursor_r = 330
     
@@ -112,18 +129,14 @@ def create_image(data_df, date_str):
         else:
             current_x = margin + col_width + col_gap
             is_left = False
-            
         current_y = cursor_l if is_left else cursor_r
         
-        # 品項標題 (● 圓點通常支援良好，保留)
         draw.text((current_x, current_y), f"● {name}", fill=c_item_title, font=font_title)
         current_y += 80
         
-        # 規格與價格
         for idx, row in group.iterrows():
             spec = str(row['規格'])
             price = str(row['本週價格'])
-            
             draw.text((current_x + 20, current_y), spec, fill=c_text, font=font_spec)
             
             if price.strip() and "$" not in price and "售完" not in price:
@@ -138,38 +151,26 @@ def create_image(data_df, date_str):
             w_spec = draw.textlength(spec, font=font_spec)
             line_start = current_x + 20 + w_spec + 20
             line_end = col_right_edge - w_price - 20
-            
             if line_end > line_start:
                 draw.line([(line_start, current_y + 25), (line_end, current_y + 25)], fill=c_line, width=1)
-                
             current_y += 60
 
-        # [修正 2] 代工資訊的亂碼
         service_val = group.iloc[0]['代工資訊']
         service_info = str(service_val) if pd.notna(service_val) else ""
-        
         if service_info and service_info.strip() != "":
             box_h = 50
             draw.rectangle([(current_x, current_y + 5), (current_x + col_width, current_y + 5 + box_h)], fill=c_note_bg)
-            
-            # 🛠️ -> 改成 ▶ (標準播放鍵符號，通常支援) 或是改用純文字 "代工："
             draw.text((current_x + 20, current_y + 10), f"▶ {service_info}", fill=c_note_text, font=font_note)
             current_y += 80
-        
         current_y += 50
-        
         if is_left:
             cursor_l = current_y
         else:
             cursor_r = current_y
 
-    # Footer
     footer_y = max(cursor_l, cursor_r) + 20
     draw.line([(margin, footer_y), (width - margin, footer_y)], fill=c_line, width=2)
-    
-    # [修正 3] 更新浮水印文字
-    draw.text((margin, footer_y + 30), "Generated by SmallOrange seafood bot v3.1", fill="#CCCCCC", font=font_footer)
-
+    draw.text((margin, footer_y + 30), "Generated by SmallOrange seafood bot", fill="#CCCCCC", font=font_footer)
     return img
 
 # --- 3. Streamlit 主程式 ---
@@ -179,9 +180,7 @@ try:
     client = get_google_sheet_client()
     sheet_url = st.secrets["sheet_url"]
     sheet = client.open_by_url(sheet_url).sheet1
-    
     data = sheet.get_all_values()
-    
     raw_headers = [h.strip() for h in data[0]]
     headers = []
     seen_count = {}
@@ -192,11 +191,18 @@ try:
         else:
             seen_count[h] = 0
             headers.append(h)
-
     df = pd.DataFrame(data[1:], columns=headers)
-    
     st.success("✅ 成功連線資料庫")
     
+    # --- 浮水印邏輯 UI 顯示 ---
+    uploaded_watermark = None
+    # 檢查是否已有固定 Logo，如果沒有，才顯示上傳框
+    if os.path.exists("logo.png") or os.path.exists("logo.jpg"):
+        st.info("✅ 已偵測到固定浮水印 (logo.png/jpg)，將自動套用。")
+    else:
+        with st.expander("🎨 上傳臨時浮水印 (若有固定需求請上傳至 GitHub)", expanded=False):
+            uploaded_watermark = st.file_uploader("上傳圖片", type=["png", "jpg"])
+
     col_date, col_info = st.columns([1, 2])
     with col_date:
         selected_date = st.date_input("選擇報價日期", datetime.date.today())
@@ -210,10 +216,8 @@ try:
         st.subheader(f"📝 輸入價格 ({date_str})")
         new_prices = []
         grouped = df.groupby('品項名稱', sort=False)
-        
         for name, group in grouped:
             st.markdown(f"#### 🐟 {name}")
-            
             for idx, row in group.iterrows():
                 spec = row['規格']
                 last_price_val = ""
@@ -222,48 +226,36 @@ try:
                     if isinstance(val, pd.Series):
                         val = val.iloc[0]
                     last_price_val = str(val) if pd.notna(val) else ""
-                
                 c1, c2 = st.columns([3, 2])
                 with c1:
                     val = st.text_input(f"{spec}", value=last_price_val, key=f"input_{idx}")
                     new_prices.append(val)
                 with c2:
-                    if last_price_val:
-                        st.caption(f"上週: {last_price_val}")
-                    else:
-                        st.caption("無紀錄")
+                    st.caption(f"上週: {last_price_val}" if last_price_val else "無紀錄")
             st.divider()
-            
         submitted = st.form_submit_button("🚀 確認發布並產生圖片", type="primary")
         
     if submitted:
         current_cols = len(data[0])
         sheet.update_cell(1, current_cols + 1, date_str)
-        
         progress_bar = st.progress(0)
         total_items = len(new_prices)
         for i, price in enumerate(new_prices):
             sheet.update_cell(i + 2, current_cols + 1, price)
             progress_bar.progress((i + 1) / total_items)
-            
         st.success(f"已新增 {date_str} 的報價紀錄！")
         
         plot_df = df[['品項名稱', '規格', '代工資訊']].copy()
         plot_df['本週價格'] = new_prices
         
         st.subheader("🖼️ 您的報價單")
-        image = create_image(plot_df, date_str)
-        st.image(image, caption="長按可下載", use_column_width=True)
+        image = create_image(plot_df, date_str, manual_upload=uploaded_watermark)
         
+        st.image(image, caption="長按可下載", use_column_width=True)
         buf = io.BytesIO()
         image.save(buf, format="PNG")
         byte_im = buf.getvalue()
-        st.download_button(
-            label="📥 下載圖片",
-            data=byte_im,
-            file_name=f"menu_{date_str.replace('/','')}.png",
-            mime="image/png"
-        )
+        st.download_button(label="📥 下載圖片", data=byte_im, file_name=f"menu_{date_str.replace('/','')}.png", mime="image/png")
 
 except Exception as e:
     st.error(f"系統發生錯誤：{e}")
