@@ -13,8 +13,14 @@ st.set_page_config(page_title="海鮮報價生成器", page_icon="🦀")
 # 我們從 Streamlit Secrets 讀取金鑰，而不是直接把密碼寫在程式碼裡
 def get_google_sheet_client():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+
     # 讀取 secrets
     creds_dict = dict(st.secrets["gcp_service_account"])
+
+    # [新增] 這一行是用來修復 private_key 換行問題的關鍵！
+    if "private_key" in creds_dict:
+        creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
     return client
