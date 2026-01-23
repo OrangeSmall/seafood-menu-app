@@ -15,7 +15,6 @@ st.set_page_config(page_title="海鮮報價生成器", page_icon="🦀")
 import json 
 def get_google_sheet_client():
    # [修改] 移除 try/except，直接讀取，這樣出錯時我們才能看到真正的修復提示
-def get_google_sheet_client():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     
     # 這裡直接讀取，不設防護網
