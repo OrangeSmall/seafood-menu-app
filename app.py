@@ -13,21 +13,14 @@ st.set_page_config(page_title="海鮮報價生成器", page_icon="🦀")
 # 我們從 Streamlit Secrets 讀取金鑰，而不是直接把密碼寫在程式碼裡
 # 記得確認最上面這行有沒有寫，沒有的話補上去
 import json 
-
-# ... (中間省略) ...
-
+def get_google_sheet_client():
+   # [修改] 移除 try/except，直接讀取，這樣出錯時我們才能看到真正的修復提示
 def get_google_sheet_client():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     
-    # --- 修改重點：改用 json.loads 讀取整大包文字 ---
-    try:
-        # 嘗試讀取整包 JSON 字串
-        creds_dict = json.loads(st.secrets["service_account_json"])
-    except:
-        # 如果失敗，嘗試讀取舊格式 (避免完全掛掉)
-        creds_dict = dict(st.secrets["gcp_service_account"])
-    # -------------------------------------------
-
+    # 這裡直接讀取，不設防護網
+    creds_dict = json.loads(st.secrets["service_account_json"])
+    
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
     return client
