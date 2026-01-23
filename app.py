@@ -93,13 +93,13 @@ def create_image(data_df, date_str):
     # A. Header
     header_h = 280
     draw.rectangle([(0, 0), (width, header_h)], fill=c_header_bg)
-    draw.text((margin, 50), "本週最新時價", fill=c_header_text, font=font_header)
+    draw.text((margin, 50), "本週活體海鮮價格", fill=c_header_text, font=font_header)
     
     # [修正 1] 去除亂碼方框，改用純文字或簡單符號
     # 📅 -> 移除，直接顯示文字
     draw.text((margin, 170), f"報價日期：{date_str}", fill="#FFF8DC", font=font_date) 
     # ⚠️ -> 改成 ※ (標準符號)
-    draw.text((width - margin - 500, 180), "※ 價格波動，以現場為主", fill="#F0E68C", font=font_date)
+    draw.text((width - margin - 500, 180), "※ 價格若有特殊情況請詢問現場主管", fill="#F0E68C", font=font_date)
 
     # B. 雙欄迴圈繪製
     cursor_l = 330
