@@ -52,7 +52,7 @@ def get_google_sheet_client():
     client = gspread.authorize(creds)
     return client
 
-# --- 2. 繪圖函式 (只顯示售價) ---
+# --- 2. 繪圖函式 (含新年背景邏輯) ---
 def create_image(data_df, date_str, manual_upload=None):
     font_path = download_font()
     width = 1600 
@@ -60,7 +60,9 @@ def create_image(data_df, date_str, manual_upload=None):
     col_gap = 100 
     col_width = (width - (margin * 2) - col_gap) / 2 
     
-    c_bg = "#FDFCF5"         
+    # 原本的底色 (當找不到背景圖時的備案)
+    c_bg_fallback = "#FDFCF5"         
+    
     c_header_bg = "#C19A6B"  
     c_header_text = "#FFFFFF"
     c_item_title = "#5C4033" 
@@ -92,8 +94,28 @@ def create_image(data_df, date_str, manual_upload=None):
             y_col2 += item_h
     total_height = max(y_col1, y_col2) + 100 
 
-    img = Image.new("RGB", (width, int(total_height)), c_bg)
-    
+    # ====== 🧧 新年背景處理邏輯 (新增) ======
+    bg_source = None
+    # 檢查是否有新年背景圖檔
+    if os.path.exists("bg_cny.png"): bg_source = "bg_cny.png"
+    elif os.path.exists("bg_cny.png"): bg_source = "bg_cny.png"
+
+    if bg_source:
+        try:
+            # 載入背景圖
+            bg_img = Image.open(bg_source).convert("RGB")
+            # 強制拉伸到畫布大小
+            bg_img = bg_img.resize((width, int(total_height)))
+            img = bg_img
+        except Exception as e:
+            # 如果讀取失敗，回退到純色背景
+            img = Image.new("RGB", (width, int(total_height)), c_bg_fallback)
+    else:
+        # 沒有背景圖，使用純色背景
+        img = Image.new("RGB", (width, int(total_height)), c_bg_fallback)
+    # ==========================================
+
+    # 浮水印邏輯
     watermark_source = None
     if os.path.exists("logo.png"): watermark_source = "logo.png"
     elif os.path.exists("logo.jpg"): watermark_source = "logo.jpg"
@@ -111,11 +133,14 @@ def create_image(data_df, date_str, manual_upload=None):
             wm.putalpha(a)
             x_pos = (width - target_w) // 2
             y_pos = (int(total_height) - target_h) // 2
+            # 使用 alpha composite 貼上，避免背景圖影響透明度
             img.paste(wm, (x_pos, y_pos), wm)
         except Exception as e:
             pass
 
     draw = ImageDraw.Draw(img)
+    
+    # Header 區塊保持實色，確保標題清楚
     header_h = 280
     draw.rectangle([(0, 0), (width, header_h)], fill=c_header_bg)
     draw.text((margin, 50), "本週最新時價", fill=c_header_text, font=font_header)
@@ -205,10 +230,13 @@ try:
     
     st.success("✅ 成功連線資料庫")
 
+    # 檢查背景圖與浮水印狀態
+    bg_status = "✅ 已啟用新年背景" if (os.path.exists("bg_cny.jpg") or os.path.exists("bg_cny.png")) else "使用預設背景"
+    wm_status = "✅ 已啟用固定浮水印" if (os.path.exists("logo.png") or os.path.exists("logo.jpg")) else "無浮水印"
+    st.caption(f"狀態檢查：{bg_status} | {wm_status}")
+
     uploaded_watermark = None
-    if os.path.exists("logo.png") or os.path.exists("logo.jpg"):
-        st.info("✅ 已套用固定浮水印")
-    else:
+    if "無浮水印" in wm_status:
         with st.expander("🎨 上傳臨時浮水印", expanded=False):
             uploaded_watermark = st.file_uploader("上傳圖片", type=["png", "jpg"])
 
@@ -271,48 +299,31 @@ try:
             submitted = st.form_submit_button("🚀 確認發布 (存檔並產圖)", type="primary")
             
         if submitted:
-            # 智慧寫入邏輯
-            # 1. 先去檢查 raw_headers 裡面有沒有 date_str
-            target_price_col = None
-            target_cost_col = None
-            
-            # gspread 的欄位是從 1 開始算的 (1-based index)
             try:
-                # 嘗試尋找已存在的日期 (注意：raw_headers 是從 data[0] 來的，是 python list, 0-based)
-                # 所以 gspread col index 要 + 1
                 p_idx = raw_headers.index(date_str)
                 target_price_col = p_idx + 1
                 st.info(f"ℹ️ 偵測到 {date_str} 資料已存在，將執行覆蓋更新。")
                 
-                # 嘗試尋找對應的成本欄位
                 cost_col_name = f"{date_str}_成本"
                 if cost_col_name in raw_headers:
                     target_cost_col = raw_headers.index(cost_col_name) + 1
                 else:
-                    # 如果有日期但沒成本欄位(罕見情況)，就預設寫在隔壁? 
-                    # 為了安全，這裡如果找不到成本欄就不寫入成本，避免寫錯格
-                    # 但如果是 V6 系統應該都會有
                     target_cost_col = target_price_col + 1
                     
             except ValueError:
-                # 沒找到 -> 代表是新的一天
                 current_cols = len(data[0])
                 target_price_col = current_cols + 1
                 target_cost_col = current_cols + 2
                 
-                # 新的一天要先寫入標題
                 sheet.update_cell(1, target_price_col, date_str)
                 sheet.update_cell(1, target_cost_col, f"{date_str}_成本")
                 st.success(f"📅 建立新日期：{date_str}")
 
-            # 開始寫入數據
             progress_bar = st.progress(0)
             total_items = len(new_prices)
             
             for i in range(total_items):
-                # 寫入售價
                 sheet.update_cell(i + 2, target_price_col, new_prices[i])
-                # 寫入成本
                 if target_cost_col:
                     sheet.update_cell(i + 2, target_cost_col, new_costs[i])
                 progress_bar.progress((i + 1) / total_items)
