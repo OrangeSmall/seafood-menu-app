@@ -52,7 +52,7 @@ def get_google_sheet_client():
     client = gspread.authorize(creds)
     return client
 
-# --- 2. 繪圖函式 (含新年背景邏輯) ---
+# --- 2. 繪圖函式 (V6.4 新年透明版) ---
 def create_image(data_df, date_str, manual_upload=None):
     font_path = download_font()
     width = 1600 
@@ -60,10 +60,9 @@ def create_image(data_df, date_str, manual_upload=None):
     col_gap = 100 
     col_width = (width - (margin * 2) - col_gap) / 2 
     
-    # 原本的底色 (當找不到背景圖時的備案)
-    c_bg_fallback = "#FDFCF5"         
-    
-    c_header_bg = "#C19A6B"  
+    # 預設顏色
+    c_bg_fallback = "#FDFCF5"
+    c_header_bg = "#C19A6B" # 原本的實心茶色
     c_header_text = "#FFFFFF"
     c_item_title = "#5C4033" 
     c_text = "#4A4A4A"       
@@ -94,28 +93,26 @@ def create_image(data_df, date_str, manual_upload=None):
             y_col2 += item_h
     total_height = max(y_col1, y_col2) + 100 
 
-    # ====== 🧧 新年背景處理邏輯 (新增) ======
+    # ====== 🧧 背景圖處理邏輯 ======
     bg_source = None
-    # 檢查是否有新年背景圖檔
     if os.path.exists("bg_cny.jpg"): bg_source = "bg_cny.jpg"
     elif os.path.exists("bg_cny.png"): bg_source = "bg_cny.png"
+    elif os.path.exists("bg_cny.PNG"): bg_source = "bg_cny.PNG" # 增加大寫檢查
 
+    is_custom_bg = False
     if bg_source:
         try:
-            # 載入背景圖
             bg_img = Image.open(bg_source).convert("RGB")
-            # 強制拉伸到畫布大小
             bg_img = bg_img.resize((width, int(total_height)))
             img = bg_img
+            is_custom_bg = True
         except Exception as e:
-            # 如果讀取失敗，回退到純色背景
+            st.error(f"背景圖載入失敗: {e}")
             img = Image.new("RGB", (width, int(total_height)), c_bg_fallback)
     else:
-        # 沒有背景圖，使用純色背景
         img = Image.new("RGB", (width, int(total_height)), c_bg_fallback)
-    # ==========================================
 
-    # 浮水印邏輯
+    # 浮水印
     watermark_source = None
     if os.path.exists("logo.png"): watermark_source = "logo.png"
     elif os.path.exists("logo.jpg"): watermark_source = "logo.jpg"
@@ -133,16 +130,24 @@ def create_image(data_df, date_str, manual_upload=None):
             wm.putalpha(a)
             x_pos = (width - target_w) // 2
             y_pos = (int(total_height) - target_h) // 2
-            # 使用 alpha composite 貼上，避免背景圖影響透明度
             img.paste(wm, (x_pos, y_pos), wm)
-        except Exception as e:
+        except:
             pass
 
-    draw = ImageDraw.Draw(img)
-    
-    # Header 區塊保持實色，確保標題清楚
+    draw = ImageDraw.Draw(img, "RGBA") # 改用 RGBA 模式以支援半透明
+
+    # Header 區塊
     header_h = 280
-    draw.rectangle([(0, 0), (width, header_h)], fill=c_header_bg)
+    
+    if is_custom_bg:
+        # 如果有新年背景，標題區塊改為「半透明黑色」，讓背景透出來，但文字看得清楚
+        # (0, 0, 0, 100) -> 黑色，透明度約 40%
+        # 如果您的背景圖很淺，也可以把這裡改成 (255, 255, 255, 150) 半透明白
+        draw.rectangle([(0, 0), (width, header_h)], fill=(193, 154, 107, 200)) # 半透明茶色
+    else:
+        # 沒有背景圖，維持實色
+        draw.rectangle([(0, 0), (width, header_h)], fill=c_header_bg)
+
     draw.text((margin, 50), "本週最新時價", fill=c_header_text, font=font_header)
     draw.text((margin, 170), f"報價日期：{date_str}", fill="#FFF8DC", font=font_date) 
     draw.text((width - margin - 500, 180), "※ 價格波動，以現場為主", fill="#F0E68C", font=font_date)
@@ -186,7 +191,8 @@ def create_image(data_df, date_str, manual_upload=None):
         service_info = str(service_val) if pd.notna(service_val) else ""
         if service_info and service_info.strip() != "":
             box_h = 50
-            draw.rectangle([(current_x, current_y + 5), (current_x + col_width, current_y + 5 + box_h)], fill=c_note_bg)
+            # 代工背景也改一點點半透明，更有質感
+            draw.rectangle([(current_x, current_y + 5), (current_x + col_width, current_y + 5 + box_h)], fill="#F2EBE5")
             draw.text((current_x + 20, current_y + 10), f"▶ {service_info}", fill=c_note_text, font=font_note)
             current_y += 80
         current_y += 50
@@ -215,7 +221,6 @@ try:
     sheet = client.open_by_url(sheet_url).sheet1
     data = sheet.get_all_values()
     
-    # --- 處理標題 ---
     raw_headers = [h.strip() for h in data[0]]
     headers = []
     seen_count = {}
@@ -230,19 +235,24 @@ try:
     
     st.success("✅ 成功連線資料庫")
 
-    # 檢查背景圖與浮水印狀態
-    bg_status = "✅ 已啟用新年背景" if (os.path.exists("bg_cny.jpg") or os.path.exists("bg_cny.png")) else "使用預設背景"
-    wm_status = "✅ 已啟用固定浮水印" if (os.path.exists("logo.png") or os.path.exists("logo.jpg")) else "無浮水印"
-    st.caption(f"狀態檢查：{bg_status} | {wm_status}")
+    # 檢查背景圖
+    bg_exists = False
+    if os.path.exists("bg_cny.jpg") or os.path.exists("bg_cny.png") or os.path.exists("bg_cny.PNG"):
+        bg_exists = True
+        st.caption("✅ 已啟用新年背景 (bg_cny.png/jpg)")
+    else:
+        st.caption("使用預設背景 (未偵測到 bg_cny)")
+
+    if os.path.exists("logo.png") or os.path.exists("logo.jpg"):
+        st.caption("✅ 已啟用固定浮水印")
 
     uploaded_watermark = None
-    if "無浮水印" in wm_status:
+    if not (os.path.exists("logo.png") or os.path.exists("logo.jpg")):
         with st.expander("🎨 上傳臨時浮水印", expanded=False):
             uploaded_watermark = st.file_uploader("上傳圖片", type=["png", "jpg"])
 
     tab1, tab2 = st.tabs(["📝 報價與成本管理", "📊 營運數據分析"])
 
-    # ====== 分頁 1: 更新報價 ======
     with tab1:
         col_date, col_info = st.columns([1, 2])
         with col_date:
@@ -250,7 +260,6 @@ try:
             date_str = selected_date.strftime("%Y/%m/%d")
         
         fixed_cols = ['品項名稱', '規格', '代工資訊']
-        
         all_cols = [c for c in df.columns if c not in fixed_cols and "Unnamed" not in c and c != ""]
         cost_cols = [c for c in all_cols if "_成本" in c]
         price_cols = [c for c in all_cols if "_成本" not in c]
@@ -260,80 +269,60 @@ try:
         
         with st.form("price_update_form"):
             st.subheader(f"📝 輸入價格與成本 ({date_str})")
-            st.caption("說明：若日期相同，系統會直接覆蓋當日舊資料，不會新增欄位。")
+            st.caption("說明：若日期相同，系統會直接覆蓋當日舊資料。")
             
             new_prices = []
             new_costs = []
-            
             grouped = df.groupby('品項名稱', sort=False)
+            
             for name, group in grouped:
                 st.markdown(f"#### 🐟 {name}")
                 for idx, row in group.iterrows():
                     spec = row['規格']
+                    last_p_val = str(row[last_price_col]) if last_price_col and pd.notna(row[last_price_col]) else ""
+                    if isinstance(row.get(last_price_col), pd.Series): last_p_val = str(row[last_price_col].iloc[0])
                     
-                    last_p_val = ""
-                    last_c_val = ""
-                    if last_price_col:
-                        val = row[last_price_col]
-                        if isinstance(val, pd.Series): val = val.iloc[0]
-                        last_p_val = str(val) if pd.notna(val) else ""
-                    
-                    if last_cost_col:
-                        val = row[last_cost_col]
-                        if isinstance(val, pd.Series): val = val.iloc[0]
-                        last_c_val = str(val) if pd.notna(val) else ""
-                    
+                    last_c_val = str(row[last_cost_col]) if last_cost_col and pd.notna(row[last_cost_col]) else ""
+                    if isinstance(row.get(last_cost_col), pd.Series): last_c_val = str(row[last_cost_col].iloc[0])
+
                     c1, c2, c3 = st.columns([2, 2, 2])
-                    
                     with c1:
                         val_p = st.text_input(f"{spec} 售價", value=last_p_val, key=f"p_{idx}", placeholder="售價")
                         new_prices.append(val_p)
                     with c2:
-                        val_c = st.text_input(f"成本 (隱藏)", value=last_c_val, key=f"c_{idx}", placeholder="成本")
+                        val_c = st.text_input(f"成本", value=last_c_val, key=f"c_{idx}", placeholder="成本")
                         new_costs.append(val_c)
                     with c3:
                         st.markdown(f"<small style='color:gray'>上週售價: {last_p_val}<br>上週成本: {last_c_val}</small>", unsafe_allow_html=True)
-                
                 st.divider()
             
-            submitted = st.form_submit_button("🚀 確認發布 (存檔並產圖)", type="primary")
+            submitted = st.form_submit_button("🚀 確認發布", type="primary")
             
         if submitted:
             try:
                 p_idx = raw_headers.index(date_str)
                 target_price_col = p_idx + 1
-                st.info(f"ℹ️ 偵測到 {date_str} 資料已存在，將執行覆蓋更新。")
-                
+                st.info(f"ℹ️ {date_str} 資料已存在，執行覆蓋更新。")
                 cost_col_name = f"{date_str}_成本"
-                if cost_col_name in raw_headers:
-                    target_cost_col = raw_headers.index(cost_col_name) + 1
-                else:
-                    target_cost_col = target_price_col + 1
-                    
+                target_cost_col = raw_headers.index(cost_col_name) + 1 if cost_col_name in raw_headers else target_price_col + 1
             except ValueError:
                 current_cols = len(data[0])
                 target_price_col = current_cols + 1
                 target_cost_col = current_cols + 2
-                
                 sheet.update_cell(1, target_price_col, date_str)
                 sheet.update_cell(1, target_cost_col, f"{date_str}_成本")
                 st.success(f"📅 建立新日期：{date_str}")
 
             progress_bar = st.progress(0)
-            total_items = len(new_prices)
-            
-            for i in range(total_items):
+            for i in range(len(new_prices)):
                 sheet.update_cell(i + 2, target_price_col, new_prices[i])
-                if target_cost_col:
-                    sheet.update_cell(i + 2, target_cost_col, new_costs[i])
-                progress_bar.progress((i + 1) / total_items)
-            
-            st.success(f"✅ 已成功更新 {date_str} 的資料！")
+                sheet.update_cell(i + 2, target_cost_col, new_costs[i])
+                progress_bar.progress((i + 1) / len(new_prices))
             
             plot_df = df[['品項名稱', '規格', '代工資訊']].copy()
             plot_df['本週價格'] = new_prices
             
-            st.subheader("🖼️ 您的報價單 (僅含售價)")
+            st.subheader("🖼️ 您的報價單")
             image = create_image(plot_df, date_str, manual_upload=uploaded_watermark)
             st.image(image, caption="長按可下載", use_column_width=True)
             buf = io.BytesIO()
@@ -341,54 +330,30 @@ try:
             byte_im = buf.getvalue()
             st.download_button(label="📥 下載圖片", data=byte_im, file_name=f"menu_{date_str.replace('/','')}.png", mime="image/png")
 
-    # ====== 分頁 2: 數據分析 ======
     with tab2:
-        st.subheader("📈 成本與售價走勢分析")
-        
+        st.subheader("📈 營運分析")
         all_items = df['品項名稱'].unique()
         c_sel1, c_sel2 = st.columns(2)
-        with c_sel1:
-            selected_item = st.selectbox("請選擇品項", all_items)
-        with c_sel2:
-            item_specs = df[df['品項名稱'] == selected_item]['規格'].unique()
-            selected_spec = st.selectbox("請選擇規格", item_specs)
+        with c_sel1: selected_item = st.selectbox("品項", all_items)
+        with c_sel2: selected_spec = st.selectbox("規格", df[df['品項名稱'] == selected_item]['規格'].unique()) if selected_item else None
         
         if selected_item and selected_spec:
             target_row = df[(df['品項名稱'] == selected_item) & (df['規格'] == selected_spec)]
-            
             if not target_row.empty:
-                all_cols = df.columns
-                date_cols = [c for c in all_cols if c not in fixed_cols and "_成本" not in c and "Unnamed" not in c and c != ""]
-                
+                date_cols = [c for c in df.columns if c not in fixed_cols and "_成本" not in c and "Unnamed" not in c and c != ""]
                 chart_data = []
-                
                 for d in date_cols:
-                    p_str = str(target_row.iloc[0][d]) if d in target_row.columns else "0"
-                    p_val = clean_price(p_str)
-                    
+                    p_val = clean_price(str(target_row.iloc[0][d]))
                     c_col = f"{d}_成本"
-                    c_val = 0
-                    if c_col in target_row.columns:
-                        c_str = str(target_row.iloc[0][c_col])
-                        c_val = clean_price(c_str)
-                    
-                    if p_val > 0: 
-                        chart_data.append({
-                            "日期": d,
-                            "售價": p_val,
-                            "成本": c_val
-                        })
+                    c_val = clean_price(str(target_row.iloc[0][c_col])) if c_col in target_row.columns else 0
+                    if p_val > 0: chart_data.append({"日期": d, "售價": p_val, "成本": c_val})
                 
                 if chart_data:
                     chart_df = pd.DataFrame(chart_data).set_index("日期")
-                    
-                    st.markdown("#### 📊 售價 vs 成本 比較圖")
-                    st.bar_chart(chart_df[["售價", "成本"]], color=["#A55B5B", "#C19A6B"]) 
-                    
-                    with st.expander("查看詳細數據"):
-                         st.dataframe(chart_df)
+                    st.bar_chart(chart_df[["售價", "成本"]], color=["#A55B5B", "#C19A6B"])
+                    with st.expander("查看數據"): st.dataframe(chart_df)
                 else:
-                    st.warning("尚無足夠數據可供繪圖。")
+                    st.warning("無數據")
 
 except Exception as e:
-    st.error(f"系統發生錯誤：{e}")
+    st.error(f"錯誤：{e}")
