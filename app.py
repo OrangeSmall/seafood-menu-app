@@ -9,6 +9,7 @@ import json
 import os
 import urllib.request 
 import re 
+import time
 
 # --- 設定頁面 ---
 st.set_page_config(page_title="海鮮報價營運系統", page_icon="🦀", layout="wide")
@@ -52,7 +53,7 @@ def get_google_sheet_client():
     client = gspread.authorize(creds)
     return client
 
-# --- 2. 繪圖函式 (V6.4 新年透明版) ---
+# --- 2. 繪圖函式 (V6.7: 價格改為白色) ---
 def create_image(data_df, date_str, manual_upload=None):
     font_path = download_font()
     width = 1600 
@@ -60,13 +61,13 @@ def create_image(data_df, date_str, manual_upload=None):
     col_gap = 100 
     col_width = (width - (margin * 2) - col_gap) / 2 
     
-    # 預設顏色
     c_bg_fallback = "#FDFCF5"
-    c_header_bg = "#C19A6B" # 原本的實心茶色
+    c_header_bg = "#C19A6B" 
     c_header_text = "#FFFFFF"
     c_item_title = "#5C4033" 
     c_text = "#4A4A4A"       
-    c_price = "#A55B5B"      
+    # [重要修改] 將價格顏色從原本的深紅色 (#A55B5B) 改為白色 (#FFFFFF)
+    c_price = "#FFFFFF"      
     c_line = "#E0D6CC"       
     c_note_bg = "#F2EBE5"    
     c_note_text = "#8E7878"  
@@ -95,9 +96,9 @@ def create_image(data_df, date_str, manual_upload=None):
 
     # ====== 🧧 背景圖處理邏輯 ======
     bg_source = None
-    if os.path.exists("bg_cny.jpg"): bg_source = "bg_cny.jpg"
-    elif os.path.exists("bg_cny.png"): bg_source = "bg_cny.png"
-    elif os.path.exists("bg_cny.PNG"): bg_source = "bg_cny.PNG" # 增加大寫檢查
+    if os.path.exists("bg_2026.png"): bg_source = "bg_2026.png"
+    elif os.path.exists("bg_2026.jpg"): bg_source = "bg_2026.jpg"
+    elif os.path.exists("bg_cny.jpg"): bg_source = "bg_cny.jpg"
 
     is_custom_bg = False
     if bg_source:
@@ -107,12 +108,10 @@ def create_image(data_df, date_str, manual_upload=None):
             img = bg_img
             is_custom_bg = True
         except Exception as e:
-            st.error(f"背景圖載入失敗: {e}")
             img = Image.new("RGB", (width, int(total_height)), c_bg_fallback)
     else:
         img = Image.new("RGB", (width, int(total_height)), c_bg_fallback)
 
-    # 浮水印
     watermark_source = None
     if os.path.exists("logo.png"): watermark_source = "logo.png"
     elif os.path.exists("logo.jpg"): watermark_source = "logo.jpg"
@@ -134,18 +133,12 @@ def create_image(data_df, date_str, manual_upload=None):
         except:
             pass
 
-    draw = ImageDraw.Draw(img, "RGBA") # 改用 RGBA 模式以支援半透明
-
-    # Header 區塊
+    draw = ImageDraw.Draw(img, "RGBA") 
     header_h = 280
     
     if is_custom_bg:
-        # 如果有新年背景，標題區塊改為「半透明黑色」，讓背景透出來，但文字看得清楚
-        # (0, 0, 0, 100) -> 黑色，透明度約 40%
-        # 如果您的背景圖很淺，也可以把這裡改成 (255, 255, 255, 150) 半透明白
-        draw.rectangle([(0, 0), (width, header_h)], fill=(193, 154, 107, 200)) # 半透明茶色
+        draw.rectangle([(0, 0), (width, header_h)], fill=(193, 154, 107, 200)) 
     else:
-        # 沒有背景圖，維持實色
         draw.rectangle([(0, 0), (width, header_h)], fill=c_header_bg)
 
     draw.text((margin, 50), "本週最新時價", fill=c_header_text, font=font_header)
@@ -191,7 +184,6 @@ def create_image(data_df, date_str, manual_upload=None):
         service_info = str(service_val) if pd.notna(service_val) else ""
         if service_info and service_info.strip() != "":
             box_h = 50
-            # 代工背景也改一點點半透明，更有質感
             draw.rectangle([(current_x, current_y + 5), (current_x + col_width, current_y + 5 + box_h)], fill="#F2EBE5")
             draw.text((current_x + 20, current_y + 10), f"▶ {service_info}", fill=c_note_text, font=font_note)
             current_y += 80
@@ -237,11 +229,13 @@ try:
 
     # 檢查背景圖
     bg_exists = False
-    if os.path.exists("bg_cny.jpg") or os.path.exists("bg_cny.png") or os.path.exists("bg_cny.PNG"):
+    if os.path.exists("bg_2026.png") or os.path.exists("bg_2026.jpg"):
         bg_exists = True
-        st.caption("✅ 已啟用新年背景 (bg_cny.png/jpg)")
+        st.caption("✅ 已啟用新年背景 (bg_2026)")
+    elif os.path.exists("bg_cny.jpg"):
+         st.caption("✅ 已啟用新年背景 (bg_cny)")
     else:
-        st.caption("使用預設背景 (未偵測到 bg_cny)")
+        st.caption("使用預設背景 (未偵測到 bg_2026)")
 
     if os.path.exists("logo.png") or os.path.exists("logo.jpg"):
         st.caption("✅ 已啟用固定浮水印")
@@ -299,26 +293,46 @@ try:
             submitted = st.form_submit_button("🚀 確認發布", type="primary")
             
         if submitted:
+            # --- V6.6 批次寫入邏輯 (防 Quota 錯誤) ---
             try:
                 p_idx = raw_headers.index(date_str)
                 target_price_col = p_idx + 1
                 st.info(f"ℹ️ {date_str} 資料已存在，執行覆蓋更新。")
+                
                 cost_col_name = f"{date_str}_成本"
-                target_cost_col = raw_headers.index(cost_col_name) + 1 if cost_col_name in raw_headers else target_price_col + 1
+                if cost_col_name in raw_headers:
+                    target_cost_col = raw_headers.index(cost_col_name) + 1
+                else:
+                    target_cost_col = target_price_col + 1
             except ValueError:
                 current_cols = len(data[0])
                 target_price_col = current_cols + 1
                 target_cost_col = current_cols + 2
+                
                 sheet.update_cell(1, target_price_col, date_str)
                 sheet.update_cell(1, target_cost_col, f"{date_str}_成本")
                 st.success(f"📅 建立新日期：{date_str}")
 
-            progress_bar = st.progress(0)
-            for i in range(len(new_prices)):
-                sheet.update_cell(i + 2, target_price_col, new_prices[i])
-                sheet.update_cell(i + 2, target_cost_col, new_costs[i])
-                progress_bar.progress((i + 1) / len(new_prices))
+            cells_to_update = []
+            total_rows = len(new_prices)
             
+            for i in range(total_rows):
+                row_idx = i + 2 
+                cells_to_update.append(
+                    gspread.Cell(row_idx, target_price_col, new_prices[i])
+                )
+                if target_cost_col:
+                    cells_to_update.append(
+                        gspread.Cell(row_idx, target_cost_col, new_costs[i])
+                    )
+
+            try:
+                sheet.update_cells(cells_to_update)
+                st.success(f"✅ 已成功更新 {date_str} 的資料！")
+            except Exception as e:
+                st.error(f"寫入失敗：{e}")
+
+            # 產圖
             plot_df = df[['品項名稱', '規格', '代工資訊']].copy()
             plot_df['本週價格'] = new_prices
             
