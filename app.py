@@ -96,8 +96,8 @@ def create_image(data_df, date_str, manual_upload=None):
 
     # ====== 🧧 背景圖處理邏輯 ======
     bg_source = None
-    if os.path.exists("bg_2026.png"): bg_source = "bg_2026.png"
-    elif os.path.exists("bg_2026.jpg"): bg_source = "bg_2026.jpg"
+    if os.path.exists("bg_cny.png"): bg_source = "bg_cny.png"
+    elif os.path.exists("bg_cny.jpg"): bg_source = "bg_cny.jpg"
     elif os.path.exists("bg_cny.jpg"): bg_source = "bg_cny.jpg"
 
     is_custom_bg = False
@@ -229,13 +229,13 @@ try:
 
     # 檢查背景圖
     bg_exists = False
-    if os.path.exists("bg_2026.png") or os.path.exists("bg_2026.jpg"):
+    if os.path.exists("bg_cny.png") or os.path.exists("bg_cny.jpg"):
         bg_exists = True
-        st.caption("✅ 已啟用新年背景 (bg_2026)")
+        st.caption("✅ 已啟用新年背景 (bg_cny)")
     elif os.path.exists("bg_cny.jpg"):
          st.caption("✅ 已啟用新年背景 (bg_cny)")
     else:
-        st.caption("使用預設背景 (未偵測到 bg_2026)")
+        st.caption("使用預設背景 (未偵測到 bg_cny)")
 
     if os.path.exists("logo.png") or os.path.exists("logo.jpg"):
         st.caption("✅ 已啟用固定浮水印")
