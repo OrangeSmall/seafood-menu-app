@@ -97,7 +97,7 @@ def create_image(data_df, date_str, manual_upload=None):
     # ====== 🧧 新年背景處理邏輯 (新增) ======
     bg_source = None
     # 檢查是否有新年背景圖檔
-    if os.path.exists("bg_cny.png"): bg_source = "bg_cny.png"
+    if os.path.exists("bg_cny.jpg"): bg_source = "bg_cny.jpg"
     elif os.path.exists("bg_cny.png"): bg_source = "bg_cny.png"
 
     if bg_source:
