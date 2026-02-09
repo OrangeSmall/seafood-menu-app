@@ -190,6 +190,7 @@ try:
     sheet = client.open_by_url(sheet_url).sheet1
     data = sheet.get_all_values()
     
+    # --- 處理標題 ---
     raw_headers = [h.strip() for h in data[0]]
     headers = []
     seen_count = {}
@@ -231,7 +232,7 @@ try:
         
         with st.form("price_update_form"):
             st.subheader(f"📝 輸入價格與成本 ({date_str})")
-            st.caption("說明：請輸入本週的售價與成本。系統會自動隱藏成本。")
+            st.caption("說明：若日期相同，系統會直接覆蓋當日舊資料，不會新增欄位。")
             
             new_prices = []
             new_costs = []
@@ -254,7 +255,6 @@ try:
                         if isinstance(val, pd.Series): val = val.iloc[0]
                         last_c_val = str(val) if pd.notna(val) else ""
                     
-                    # [修正] 移除毛利率計算，只單純顯示上週文字紀錄
                     c1, c2, c3 = st.columns([2, 2, 2])
                     
                     with c1:
@@ -264,7 +264,6 @@ try:
                         val_c = st.text_input(f"成本 (隱藏)", value=last_c_val, key=f"c_{idx}", placeholder="成本")
                         new_costs.append(val_c)
                     with c3:
-                        # 這裡不做任何數學運算，直接顯示字串，避免亂碼錯誤
                         st.markdown(f"<small style='color:gray'>上週售價: {last_p_val}<br>上週成本: {last_c_val}</small>", unsafe_allow_html=True)
                 
                 st.divider()
@@ -272,19 +271,53 @@ try:
             submitted = st.form_submit_button("🚀 確認發布 (存檔並產圖)", type="primary")
             
         if submitted:
-            current_cols = len(data[0])
-            sheet.update_cell(1, current_cols + 1, date_str)
-            sheet.update_cell(1, current_cols + 2, f"{date_str}_成本")
+            # 智慧寫入邏輯
+            # 1. 先去檢查 raw_headers 裡面有沒有 date_str
+            target_price_col = None
+            target_cost_col = None
             
+            # gspread 的欄位是從 1 開始算的 (1-based index)
+            try:
+                # 嘗試尋找已存在的日期 (注意：raw_headers 是從 data[0] 來的，是 python list, 0-based)
+                # 所以 gspread col index 要 + 1
+                p_idx = raw_headers.index(date_str)
+                target_price_col = p_idx + 1
+                st.info(f"ℹ️ 偵測到 {date_str} 資料已存在，將執行覆蓋更新。")
+                
+                # 嘗試尋找對應的成本欄位
+                cost_col_name = f"{date_str}_成本"
+                if cost_col_name in raw_headers:
+                    target_cost_col = raw_headers.index(cost_col_name) + 1
+                else:
+                    # 如果有日期但沒成本欄位(罕見情況)，就預設寫在隔壁? 
+                    # 為了安全，這裡如果找不到成本欄就不寫入成本，避免寫錯格
+                    # 但如果是 V6 系統應該都會有
+                    target_cost_col = target_price_col + 1
+                    
+            except ValueError:
+                # 沒找到 -> 代表是新的一天
+                current_cols = len(data[0])
+                target_price_col = current_cols + 1
+                target_cost_col = current_cols + 2
+                
+                # 新的一天要先寫入標題
+                sheet.update_cell(1, target_price_col, date_str)
+                sheet.update_cell(1, target_cost_col, f"{date_str}_成本")
+                st.success(f"📅 建立新日期：{date_str}")
+
+            # 開始寫入數據
             progress_bar = st.progress(0)
             total_items = len(new_prices)
             
             for i in range(total_items):
-                sheet.update_cell(i + 2, current_cols + 1, new_prices[i])
-                sheet.update_cell(i + 2, current_cols + 2, new_costs[i])
+                # 寫入售價
+                sheet.update_cell(i + 2, target_price_col, new_prices[i])
+                # 寫入成本
+                if target_cost_col:
+                    sheet.update_cell(i + 2, target_cost_col, new_costs[i])
                 progress_bar.progress((i + 1) / total_items)
             
-            st.success(f"已儲存！本週資料位於第 {current_cols+1} 與 {current_cols+2} 欄。")
+            st.success(f"✅ 已成功更新 {date_str} 的資料！")
             
             plot_df = df[['品項名稱', '規格', '代工資訊']].copy()
             plot_df['本週價格'] = new_prices
