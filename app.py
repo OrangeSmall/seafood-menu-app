@@ -53,7 +53,7 @@ def get_google_sheet_client():
     client = gspread.authorize(creds)
     return client
 
-# --- 2. 繪圖函式 (V6.7: 價格改為白色) ---
+# --- 2. 繪圖函式 (維持 V6.7 白色價格) ---
 def create_image(data_df, date_str, manual_upload=None):
     font_path = download_font()
     width = 1600 
@@ -66,8 +66,7 @@ def create_image(data_df, date_str, manual_upload=None):
     c_header_text = "#FFFFFF"
     c_item_title = "#5C4033" 
     c_text = "#4A4A4A"       
-    # [重要修改] 將價格顏色從原本的深紅色 (#A55B5B) 改為白色 (#FFFFFF)
-    c_price = "#FFFFFF"      
+    c_price = "#FFFFFF"  # 白色價格
     c_line = "#E0D6CC"       
     c_note_bg = "#F2EBE5"    
     c_note_text = "#8E7878"  
@@ -94,10 +93,10 @@ def create_image(data_df, date_str, manual_upload=None):
             y_col2 += item_h
     total_height = max(y_col1, y_col2) + 100 
 
-    # ====== 🧧 背景圖處理邏輯 ======
+    # ====== 背景圖處理 ======
     bg_source = None
-    if os.path.exists("bg_cny.png"): bg_source = "bg_cny.png"
-    elif os.path.exists("bg_cny.jpg"): bg_source = "bg_cny.jpg"
+    if os.path.exists("bg_2026.png"): bg_source = "bg_2026.png"
+    elif os.path.exists("bg_2026.jpg"): bg_source = "bg_2026.jpg"
     elif os.path.exists("bg_cny.jpg"): bg_source = "bg_cny.jpg"
 
     is_custom_bg = False
@@ -229,13 +228,13 @@ try:
 
     # 檢查背景圖
     bg_exists = False
-    if os.path.exists("bg_cny.png") or os.path.exists("bg_cny.jpg"):
+    if os.path.exists("bg_2026.png") or os.path.exists("bg_2026.jpg"):
         bg_exists = True
-        st.caption("✅ 已啟用新年背景 (bg_cny)")
+        st.caption("✅ 已啟用新年背景 (bg_2026)")
     elif os.path.exists("bg_cny.jpg"):
          st.caption("✅ 已啟用新年背景 (bg_cny)")
     else:
-        st.caption("使用預設背景 (未偵測到 bg_cny)")
+        st.caption("使用預設背景 (未偵測到 bg_2026)")
 
     if os.path.exists("logo.png") or os.path.exists("logo.jpg"):
         st.caption("✅ 已啟用固定浮水印")
@@ -293,7 +292,7 @@ try:
             submitted = st.form_submit_button("🚀 確認發布", type="primary")
             
         if submitted:
-            # --- V6.6 批次寫入邏輯 (防 Quota 錯誤) ---
+            # --- V6.8 自動擴充欄位邏輯 (防止 API 400 錯誤) ---
             try:
                 p_idx = raw_headers.index(date_str)
                 target_price_col = p_idx + 1
@@ -309,6 +308,13 @@ try:
                 target_price_col = current_cols + 1
                 target_cost_col = current_cols + 2
                 
+                # [新增功能] 檢查目前 Sheet 寬度夠不夠，不夠就加
+                required_cols = target_cost_col 
+                current_sheet_cols = sheet.col_count # 取得目前最大欄位數
+                if required_cols > current_sheet_cols:
+                    sheet.add_cols(required_cols - current_sheet_cols)
+                    st.info(f"表格寬度不足，已自動擴充 {required_cols - current_sheet_cols} 欄。")
+
                 sheet.update_cell(1, target_price_col, date_str)
                 sheet.update_cell(1, target_cost_col, f"{date_str}_成本")
                 st.success(f"📅 建立新日期：{date_str}")
