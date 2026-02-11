@@ -53,7 +53,7 @@ def get_google_sheet_client():
     client = gspread.authorize(creds)
     return client
 
-# --- 2. 繪圖函式 (維持 V6.7 白色價格) ---
+# --- 2. 繪圖函式 (V6.9: 價格深灰色 + bg_cny優先) ---
 def create_image(data_df, date_str, manual_upload=None):
     font_path = download_font()
     width = 1600 
@@ -66,7 +66,8 @@ def create_image(data_df, date_str, manual_upload=None):
     c_header_text = "#FFFFFF"
     c_item_title = "#5C4033" 
     c_text = "#4A4A4A"       
-    c_price = "#FFFFFF"  # 白色價格
+    # [重要修改] 將價格顏色改為深灰色 (#333333)，在淺色或紅色背景上都清楚
+    c_price = "#333333"      
     c_line = "#E0D6CC"       
     c_note_bg = "#F2EBE5"    
     c_note_text = "#8E7878"  
@@ -93,11 +94,13 @@ def create_image(data_df, date_str, manual_upload=None):
             y_col2 += item_h
     total_height = max(y_col1, y_col2) + 100 
 
-    # ====== 背景圖處理 ======
+    # ====== 🧧 背景圖處理邏輯 (優先找 bg_cny) ======
     bg_source = None
-    if os.path.exists("bg_2026.png"): bg_source = "bg_2026.png"
-    elif os.path.exists("bg_2026.jpg"): bg_source = "bg_2026.jpg"
+    # 優先尋找 bg_cny (支援 png 與 jpg)
+    if os.path.exists("bg_cny.png"): bg_source = "bg_cny.png"
     elif os.path.exists("bg_cny.jpg"): bg_source = "bg_cny.jpg"
+    # 保留 bg_2026 作為備案
+    elif os.path.exists("bg_2026.png"): bg_source = "bg_2026.png"
 
     is_custom_bg = False
     if bg_source:
@@ -136,6 +139,7 @@ def create_image(data_df, date_str, manual_upload=None):
     header_h = 280
     
     if is_custom_bg:
+        # 標題區塊半透明，讓背景透出來
         draw.rectangle([(0, 0), (width, header_h)], fill=(193, 154, 107, 200)) 
     else:
         draw.rectangle([(0, 0), (width, header_h)], fill=c_header_bg)
@@ -170,6 +174,7 @@ def create_image(data_df, date_str, manual_upload=None):
             
             col_right_edge = current_x + col_width
             w_price = draw.textlength(price_display, font=font_price)
+            # 這裡使用 c_price (現在是深灰色)
             draw.text((col_right_edge - w_price, current_y), price_display, fill=c_price, font=font_price)
             
             w_spec = draw.textlength(spec, font=font_spec)
@@ -228,13 +233,13 @@ try:
 
     # 檢查背景圖
     bg_exists = False
-    if os.path.exists("bg_2026.png") or os.path.exists("bg_2026.jpg"):
+    if os.path.exists("bg_cny.png") or os.path.exists("bg_cny.jpg"):
         bg_exists = True
-        st.caption("✅ 已啟用新年背景 (bg_2026)")
-    elif os.path.exists("bg_cny.jpg"):
-         st.caption("✅ 已啟用新年背景 (bg_cny)")
+        st.caption("✅ 已啟用新年背景 (bg_cny)")
+    elif os.path.exists("bg_2026.png") or os.path.exists("bg_2026.jpg"):
+         st.caption("✅ 已啟用新年背景 (bg_2026)")
     else:
-        st.caption("使用預設背景 (未偵測到 bg_2026)")
+        st.caption("使用預設背景")
 
     if os.path.exists("logo.png") or os.path.exists("logo.jpg"):
         st.caption("✅ 已啟用固定浮水印")
@@ -308,7 +313,7 @@ try:
                 target_price_col = current_cols + 1
                 target_cost_col = current_cols + 2
                 
-                # [新增功能] 檢查目前 Sheet 寬度夠不夠，不夠就加
+                # 檢查目前 Sheet 寬度夠不夠，不夠就加
                 required_cols = target_cost_col 
                 current_sheet_cols = sheet.col_count # 取得目前最大欄位數
                 if required_cols > current_sheet_cols:
