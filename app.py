@@ -53,7 +53,7 @@ def get_google_sheet_client():
     client = gspread.authorize(creds)
     return client
 
-# --- 2. 繪圖函式 (V6.9 標準) ---
+# --- 2. 繪圖函式 (V6.9 標準: 深灰字 + 新年背景) ---
 def create_image(data_df, date_str, manual_upload=None):
     font_path = download_font()
     width = 1600 
@@ -200,18 +200,15 @@ def clean_price(price_str):
     if not isinstance(price_str, str): return 0
     price_str = price_str.replace(",", "").strip()
     
-    # 1. 優先尋找 $ 或 元 旁邊的數字 (最精準)
-    # 例如 "$12000" 或 "12000元"
+    # 1. 優先尋找 $ 或 元 旁邊的數字
     money_pattern = re.search(r'\$(\d+\.?\d*)', price_str)
     if money_pattern: return float(money_pattern.group(1))
     
     yuan_pattern = re.search(r'(\d+\.?\d*)元', price_str)
     if yuan_pattern: return float(yuan_pattern.group(1))
 
-    # 2. 如果沒有符號，抓取所有數字，並選擇「最大」的那個
-    # 例如 "3.5-4kg 12000" -> 抓到 [3.5, 4, 12000] -> 回傳 12000
-    # 這能有效過濾掉重量 (通常重量數字小，價格數字大)
-    nums = re.findall(r"[-+]?\d*\.\d+|\d+", price_str.replace("$", "")) # 去掉 $ 避免干擾
+    # 2. 如果沒有符號，抓取最大的數字 (防重量干擾)
+    nums = re.findall(r"[-+]?\d*\.\d+|\d+", price_str.replace("$", ""))
     if nums:
         float_nums = [float(n) for n in nums]
         return max(float_nums)
@@ -372,7 +369,6 @@ try:
         if selected_item and selected_spec:
             target_row = df[(df['品項名稱'] == selected_item) & (df['規格'] == selected_spec)]
             if not target_row.empty:
-                # [V7.2 新功能] 只看成本模式開關
                 only_cost_mode = st.checkbox("☐ 僅顯示成本趨勢 (排除售價干擾)", help="當商品單位不統一時 (如：每斤 vs 整隻)，勾選此項可避免圖表失真。")
 
                 date_cols = [c for c in df.columns if c not in fixed_cols and "_成本" not in c and "Unnamed" not in c and c != ""]
@@ -385,20 +381,17 @@ try:
                     p_val = clean_price(p_str)
                     c_val = clean_price(c_str)
                     
-                    # 邏輯：
-                    # 1. 正常模式：售價必須 > 0 才顯示 (過濾時價)
-                    # 2. 僅看成本模式：只要有成本就顯示 (不管售價是否亂跳)
                     if only_cost_mode:
-                        if c_val > 0: # 只要有成本就畫圖
+                        if c_val > 0: 
                             chart_data.append({
                                 "日期": d,
                                 "原始售價(Text)": p_str,
-                                "售價": p_val, # 雖然存了但不畫
+                                "售價": p_val, 
                                 "原始成本(Text)": c_str,
                                 "成本": c_val
                             })
                     else:
-                        if p_val > 0: # 正常模式，沒售價就不畫
+                        if p_val > 0: 
                             chart_data.append({
                                 "日期": d,
                                 "原始售價(Text)": p_str,
@@ -409,22 +402,26 @@ try:
                 
                 if chart_data:
                     chart_df = pd.DataFrame(chart_data)
-                    chart_df = chart_df.sort_values(by="日期")
+                    
+                    # [V7.3 重要修正] 確保依據「日期」的真實時間排序，而非文字排序
+                    # 這樣能保證 .iloc[-1] 永遠是時間上最晚的 (例如 9號 會排在 1號 後面)
+                    chart_df['temp_sort_date'] = pd.to_datetime(chart_df['日期'], errors='coerce')
+                    chart_df = chart_df.sort_values(by='temp_sort_date')
                     
                     chart_df["毛利$"] = chart_df["售價"] - chart_df["成本"]
                     chart_df["毛利率%"] = chart_df.apply(lambda x: round((x["毛利$"]/x["售價"]*100), 1) if x["售價"]>0 else 0, axis=1)
 
+                    # 取出排序後的最後一筆 (即最新日期，如 9號)
                     latest_data = chart_df.iloc[-1]
                     
-                    # 看板顯示邏輯
                     kpi1, kpi2, kpi3 = st.columns(3)
                     if only_cost_mode:
-                        kpi1.metric("最新售價", "---") # 隱藏
-                        kpi2.metric("最新成本", f"${int(latest_data['成本'])}")
-                        kpi3.metric("最新毛利率", "---") # 隱藏
+                        kpi1.metric("最新售價", "---") 
+                        kpi2.metric("最新成本 (依最新記錄)", f"${int(latest_data['成本'])}")
+                        kpi3.metric("最新毛利率", "---") 
                     else:
                         kpi1.metric("最新售價", f"${int(latest_data['售價'])}")
-                        kpi2.metric("最新成本", f"${int(latest_data['成本'])}")
+                        kpi2.metric("最新成本 (依最新記錄)", f"${int(latest_data['成本'])}")
                         kpi3.metric("最新毛利率", f"{latest_data['毛利率%']}%", 
                                     delta=f"{latest_data['毛利$']}元" if latest_data['毛利$'] > 0 else "無利潤")
                     
@@ -432,12 +429,10 @@ try:
                     st.markdown("#### 📊 價格波動趨勢圖")
                     
                     if only_cost_mode:
-                        # 只畫成本線
                         line_chart_data = chart_df.set_index("日期")[["成本"]]
-                        st.line_chart(line_chart_data, color=["#8E7878"]) # 茶色
+                        st.line_chart(line_chart_data, color=["#8E7878"])
                         st.caption("ℹ️ 目前為「僅看成本」模式，售價線已隱藏。")
                     else:
-                        # 畫雙線
                         line_chart_data = chart_df.set_index("日期")[["售價", "成本"]]
                         st.line_chart(line_chart_data, color=["#A55B5B", "#8E7878"])
 
