@@ -233,6 +233,9 @@ try:
             headers.append(h)
     df = pd.DataFrame(data[1:], columns=headers)
     
+    # 紀錄每一筆資料對應的真實 Google Sheet 列數 (因為有標題，所以 index + 2)
+    df['sheet_row'] = df.index + 2 
+    
     st.success("✅ 成功連線資料庫")
 
     bg_exists = False
@@ -260,7 +263,7 @@ try:
             selected_date = st.date_input("選擇報價日期", datetime.date.today())
             date_str = selected_date.strftime("%Y/%m/%d")
         
-        fixed_cols = ['品項名稱', '規格', '代工資訊']
+        fixed_cols = ['品項名稱', '規格', '代工資訊', 'sheet_row']
         all_cols = [c for c in df.columns if c not in fixed_cols and "Unnamed" not in c and c != ""]
         cost_cols = [c for c in all_cols if "_成本" in c]
         price_cols = [c for c in all_cols if "_成本" not in c]
@@ -270,13 +273,16 @@ try:
         
         with st.form("price_update_form"):
             st.subheader(f"📝 輸入價格與成本 ({date_str})")
-            st.caption("說明：若日期相同，系統會直接覆蓋當日舊資料。")
+            st.caption("💡 提示：若本週暫停供應，請將「售價」留白，即可在報價圖片中自動隱藏。若要長期下架，請在 Sheet 上的名稱加入 [停售]。")
             
-            new_prices = []
-            new_costs = []
+            updates = [] # 用來收集此次要寫入的資料
             grouped = df.groupby('品項名稱', sort=False)
             
             for name, group in grouped:
+                # [V7.5 長期下架過濾]：名稱有 [停售] 或 [隱藏]，就不顯示在更新表單中
+                if "[停售]" in name or "[隱藏]" in name:
+                    continue
+
                 st.markdown(f"#### 🐟 {name}")
                 for idx, row in group.iterrows():
                     spec = row['規格']
@@ -288,13 +294,21 @@ try:
 
                     c1, c2, c3 = st.columns([2, 2, 2])
                     with c1:
-                        val_p = st.text_input(f"{spec} 售價", value=last_p_val, key=f"p_{idx}", placeholder="售價")
-                        new_prices.append(val_p)
+                        val_p = st.text_input(f"{spec} 售價", value=last_p_val, key=f"p_{idx}", placeholder="售價留空即隱藏")
                     with c2:
                         val_c = st.text_input(f"成本", value=last_c_val, key=f"c_{idx}", placeholder="成本")
-                        new_costs.append(val_c)
                     with c3:
                         st.markdown(f"<small style='color:gray'>上週售價: {last_p_val}<br>上週成本: {last_c_val}</small>", unsafe_allow_html=True)
+                    
+                    # 將表單數據綁定到真實的 Sheet 列數
+                    updates.append({
+                        'sheet_row': row['sheet_row'],
+                        'name': name,
+                        'spec': spec,
+                        'service': row['代工資訊'],
+                        'price': val_p,
+                        'cost': val_c
+                    })
                 st.divider()
             
             submitted = st.form_submit_button("🚀 確認發布", type="primary")
@@ -319,24 +333,17 @@ try:
                 current_sheet_cols = sheet.col_count
                 if required_cols > current_sheet_cols:
                     sheet.add_cols(required_cols - current_sheet_cols)
-                    st.info(f"表格寬度不足，已自動擴充 {required_cols - current_sheet_cols} 欄。")
 
                 sheet.update_cell(1, target_price_col, date_str)
                 sheet.update_cell(1, target_cost_col, f"{date_str}_成本")
                 st.success(f"📅 建立新日期：{date_str}")
 
+            # 精準批次寫入：利用前面記下的 sheet_row，就不怕隱藏商品導致錯位
             cells_to_update = []
-            total_rows = len(new_prices)
-            
-            for i in range(total_rows):
-                row_idx = i + 2 
-                cells_to_update.append(
-                    gspread.Cell(row_idx, target_price_col, new_prices[i])
-                )
+            for u in updates:
+                cells_to_update.append(gspread.Cell(u['sheet_row'], target_price_col, u['price']))
                 if target_cost_col:
-                    cells_to_update.append(
-                        gspread.Cell(row_idx, target_cost_col, new_costs[i])
-                    )
+                    cells_to_update.append(gspread.Cell(u['sheet_row'], target_cost_col, u['cost']))
 
             try:
                 sheet.update_cells(cells_to_update)
@@ -344,29 +351,37 @@ try:
             except Exception as e:
                 st.error(f"寫入失敗：{e}")
 
-            plot_df = df[['品項名稱', '規格', '代工資訊']].copy()
-            plot_df['本週價格'] = new_prices
+            # [V7.5 報價單自動去白機制]
+            # 只挑出「有輸入售價」的項目去產圖，完全過濾掉缺貨/空白項目
+            plot_data = [u for u in updates if u['price'].strip() != ""]
             
-            st.subheader("🖼️ 您的報價單")
-            image = create_image(plot_df, date_str, manual_upload=uploaded_watermark)
-            st.image(image, caption="長按可下載", use_column_width=True)
-            buf = io.BytesIO()
-            image.save(buf, format="PNG")
-            byte_im = buf.getvalue()
-            st.download_button(label="📥 下載圖片", data=byte_im, file_name=f"menu_{date_str.replace('/','')}.png", mime="image/png")
+            if not plot_data:
+                st.warning("⚠️ 提示：您尚未填寫任何售價，無法生成報價圖片。")
+            else:
+                plot_df = pd.DataFrame(plot_data)
+                plot_df.rename(columns={'name':'品項名稱', 'spec':'規格', 'service':'代工資訊', 'price':'本週價格'}, inplace=True)
+                
+                st.subheader("🖼️ 您的報價單")
+                image = create_image(plot_df, date_str, manual_upload=uploaded_watermark)
+                st.image(image, caption="長按可下載", use_column_width=True)
+                buf = io.BytesIO()
+                image.save(buf, format="PNG")
+                byte_im = buf.getvalue()
+                st.download_button(label="📥 下載圖片", data=byte_im, file_name=f"menu_{date_str.replace('/','')}.png", mime="image/png")
 
     with tab2:
         st.subheader("📈 營運主管看板")
         
+        # 即使名稱有 [停售]，仍然允許在下拉選單被選取，供主管查閱歷史
         all_items = df['品項名稱'].unique()
         c_sel1, c_sel2 = st.columns(2)
-        with c_sel1: selected_item = st.selectbox("品項", all_items)
+        with c_sel1: selected_item = st.selectbox("品項 (包含歷史停售)", all_items)
         with c_sel2: selected_spec = st.selectbox("規格", df[df['品項名稱'] == selected_item]['規格'].unique()) if selected_item else None
         
         if selected_item and selected_spec:
             target_row = df[(df['品項名稱'] == selected_item) & (df['規格'] == selected_spec)]
             if not target_row.empty:
-                only_cost_mode = st.checkbox("☐ 僅顯示成本趨勢 (排除售價干擾)", help="當商品單位不統一時 (如：每斤 vs 整隻)，勾選此項可避免圖表失真。")
+                only_cost_mode = st.checkbox("☐ 僅顯示成本趨勢 (排除售價干擾)")
 
                 date_cols = [c for c in df.columns if c not in fixed_cols and "_成本" not in c and "Unnamed" not in c and c != ""]
                 chart_data = []
@@ -378,7 +393,6 @@ try:
                     p_val = clean_price(p_str)
                     c_val = clean_price(c_str)
                     
-                    # 寬鬆收集：只要有任何數據就加入列表
                     if p_val > 0 or c_val > 0:
                         chart_data.append({
                             "日期": d,
@@ -396,17 +410,9 @@ try:
                     chart_df["毛利$"] = chart_df["售價"] - chart_df["成本"]
                     chart_df["毛利率%"] = chart_df.apply(lambda x: round((x["毛利$"]/x["售價"]*100), 1) if x["售價"]>0 else 0, axis=1)
 
-                    # --- [V7.4 核心修正] 獨立尋找「最新的有效數值」 ---
-                    # 不直接拿最後一行 (因為最後一行可能是今天，但成本還沒填)
-                    
-                    # 1. 找最新售價
                     valid_prices = chart_df[chart_df['售價'] > 0]
-                    if not valid_prices.empty:
-                        last_valid_price = int(valid_prices.iloc[-1]['售價'])
-                    else:
-                        last_valid_price = 0
+                    last_valid_price = int(valid_prices.iloc[-1]['售價']) if not valid_prices.empty else 0
 
-                    # 2. 找最新成本
                     valid_costs = chart_df[chart_df['成本'] > 0]
                     if not valid_costs.empty:
                         last_valid_cost = int(valid_costs.iloc[-1]['成本'])
@@ -415,8 +421,6 @@ try:
                         last_valid_cost = 0
                         last_cost_date = "無"
 
-                    # 3. 找最新毛利 (取兩者都有的那天，或者直接用最新數據算)
-                    # 這裡比較安全的是用最新的有效數據來估算
                     if last_valid_price > 0 and last_valid_cost > 0:
                         est_profit = last_valid_price - last_valid_cost
                         est_margin = round((est_profit / last_valid_price * 100), 1)
@@ -439,12 +443,10 @@ try:
                     st.markdown("#### 📊 價格波動趨勢圖")
                     
                     if only_cost_mode:
-                        # 為了圖表美觀，這裡只過濾出有成本的資料來畫
                         plot_df = chart_df[chart_df['成本'] > 0].set_index("日期")[["成本"]]
                         st.line_chart(plot_df, color=["#8E7878"])
                         st.caption("ℹ️ 目前為「僅看成本」模式，售價線已隱藏。")
                     else:
-                        # 正常模式下，全部畫出來，讓主管看到斷層(如果有的話)
                         line_chart_data = chart_df.set_index("日期")[["售價", "成本"]]
                         st.line_chart(line_chart_data, color=["#A55B5B", "#8E7878"])
 
