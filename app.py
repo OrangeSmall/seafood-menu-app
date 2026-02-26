@@ -60,6 +60,8 @@ def create_image(data_df, date_str, manual_upload=None):
     margin = 60
     col_gap = 100 
     col_width = (width - (margin * 2) - col_gap) / 2 
+    # 先定義標題高度，方便計算 Logo 位置
+    header_h = 280
     
     c_bg_fallback = "#FDFCF5"
     c_header_bg = "#C19A6B" 
@@ -110,6 +112,7 @@ def create_image(data_df, date_str, manual_upload=None):
     else:
         img = Image.new("RGB", (width, int(total_height)), c_bg_fallback)
 
+    # ====== [V7.6] Logo 浮水印處理邏輯 (置於上方欄位正中間) ======
     watermark_source = None
     if os.path.exists("logo.png"): watermark_source = "logo.png"
     elif os.path.exists("logo.jpg"): watermark_source = "logo.jpg"
@@ -118,21 +121,31 @@ def create_image(data_df, date_str, manual_upload=None):
     if watermark_source:
         try:
             wm = Image.open(watermark_source).convert("RGBA")
-            target_w = int(width * 0.5)
-            ratio = target_w / float(wm.size[0])
-            target_h = int(float(wm.size[1]) * float(ratio))
+            
+            # 1. 計算縮放比例：讓高度適應標題區塊 (約佔標題高度的 70%)
+            target_h = int(header_h * 0.7)
+            ratio = target_h / float(wm.size[1])
+            target_w = int(float(wm.size[0]) * float(ratio))
+            
+            # 2. 調整大小與透明度
             wm = wm.resize((target_w, target_h))
             r, g, b, a = wm.split()
-            a = a.point(lambda p: p * 0.10) 
+            # 透明度設為 20% (0.2)，讓它看得見但不會搶走文字風采
+            a = a.point(lambda p: p * 0.20) 
             wm.putalpha(a)
+            
+            # 3. 計算置中位置 (水平置中，垂直在標題區塊內置中)
             x_pos = (width - target_w) // 2
-            y_pos = (int(total_height) - target_h) // 2
+            y_pos = (header_h - target_h) // 2
+            
+            # 4. 貼上浮水印 (在畫文字之前貼，這樣文字會浮在上面)
             img.paste(wm, (x_pos, y_pos), wm)
-        except:
+        except Exception as e:
+            # print(f"浮水印載入失敗: {e}") # 除錯用
             pass
 
     draw = ImageDraw.Draw(img, "RGBA") 
-    header_h = 280
+    # header_h = 280 # 已移至上方定義
     
     if is_custom_bg:
         draw.rectangle([(0, 0), (width, header_h)], fill=(193, 154, 107, 200)) 
@@ -233,7 +246,6 @@ try:
             headers.append(h)
     df = pd.DataFrame(data[1:], columns=headers)
     
-    # 紀錄每一筆資料對應的真實 Google Sheet 列數 (因為有標題，所以 index + 2)
     df['sheet_row'] = df.index + 2 
     
     st.success("✅ 成功連線資料庫")
@@ -248,7 +260,7 @@ try:
         st.caption("使用預設背景")
 
     if os.path.exists("logo.png") or os.path.exists("logo.jpg"):
-        st.caption("✅ 已啟用固定浮水印")
+        st.caption("✅ 已啟用固定浮水印 (顯示於標題正中間)")
 
     uploaded_watermark = None
     if not (os.path.exists("logo.png") or os.path.exists("logo.jpg")):
@@ -275,11 +287,10 @@ try:
             st.subheader(f"📝 輸入價格與成本 ({date_str})")
             st.caption("💡 提示：若本週暫停供應，請將「售價」留白，即可在報價圖片中自動隱藏。若要長期下架，請在 Sheet 上的名稱加入 [停售]。")
             
-            updates = [] # 用來收集此次要寫入的資料
+            updates = [] 
             grouped = df.groupby('品項名稱', sort=False)
             
             for name, group in grouped:
-                # [V7.5 長期下架過濾]：名稱有 [停售] 或 [隱藏]，就不顯示在更新表單中
                 if "[停售]" in name or "[隱藏]" in name:
                     continue
 
@@ -300,7 +311,6 @@ try:
                     with c3:
                         st.markdown(f"<small style='color:gray'>上週售價: {last_p_val}<br>上週成本: {last_c_val}</small>", unsafe_allow_html=True)
                     
-                    # 將表單數據綁定到真實的 Sheet 列數
                     updates.append({
                         'sheet_row': row['sheet_row'],
                         'name': name,
@@ -338,7 +348,6 @@ try:
                 sheet.update_cell(1, target_cost_col, f"{date_str}_成本")
                 st.success(f"📅 建立新日期：{date_str}")
 
-            # 精準批次寫入：利用前面記下的 sheet_row，就不怕隱藏商品導致錯位
             cells_to_update = []
             for u in updates:
                 cells_to_update.append(gspread.Cell(u['sheet_row'], target_price_col, u['price']))
@@ -351,8 +360,6 @@ try:
             except Exception as e:
                 st.error(f"寫入失敗：{e}")
 
-            # [V7.5 報價單自動去白機制]
-            # 只挑出「有輸入售價」的項目去產圖，完全過濾掉缺貨/空白項目
             plot_data = [u for u in updates if u['price'].strip() != ""]
             
             if not plot_data:
@@ -372,7 +379,6 @@ try:
     with tab2:
         st.subheader("📈 營運主管看板")
         
-        # 即使名稱有 [停售]，仍然允許在下拉選單被選取，供主管查閱歷史
         all_items = df['品項名稱'].unique()
         c_sel1, c_sel2 = st.columns(2)
         with c_sel1: selected_item = st.selectbox("品項 (包含歷史停售)", all_items)
